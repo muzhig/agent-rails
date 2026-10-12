@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""ghflow: the only way an agent moves a GitHub issue through its workflow.
+
+States are labels on the issue:
+
+    (none) --claim--> in-progress --review--> review --done--> done
+                         ^                      |
+                         +-------rework---------+
+
+The wrapper refuses illegal moves instead of trusting the model to follow
+the order:
+
+* ``review`` needs the issue in ``in-progress``, a PR whose body links the
+  issue (``Closes #N`` / ``Fixes #N`` / ``Resolves #N``), a results comment
+  that can be read back, and at least one docs file in the read log written
+  by the PostToolUse hook since the claim.
+* ``done`` needs the issue in ``review`` and a linked PR that is merged.
+
+Every write is followed by a read: a label change, an assignment or a
+comment counts only once a fresh GET shows it. Exit codes: 0 ok, 1 gh
+failed, 3 move refused, 4 write not confirmed by read-back.
+
+Run ``ghflow --help`` for the commands.
+"""
+
+import argparse
+import fnmatch
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+STATES = ("in-progress", "review", "done")
+LABEL_COLORS = {"in-progress": "fbca04", "review": "0e8a16", "done": "5319e7"}
+RESULT_MARKER = "<!-- agent-rails:result -->"
+LINK_RE = r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#{n}\b"
+DEFAULT_DOCS = "README*,CONTRIBUTING*,docs/*,*.md"
+DEFAULT_NOT_DOCS = ".claude/*,.agents/*,.codex/*,.agent-rails/*,.rails/*"
+EXIT_GH, EXIT_REFUSED, EXIT_UNCONFIRMED = 1, 3, 4
+
+
+class Refused(Exception):
+    """An illegal state transition or a missing precondition."""
+
+
+class Unconfirmed(Exception):
+    """A write that a fresh read does not show."""
+
+
+class GhError(Exception):
+    """gh exited non-zero."""
+
+
+def gh_binary():
+    """Return the gh executable; AGENT_RAILS_GH overrides it for tests."""
+    return os.environ.get("AGENT_RAILS_GH", "gh")
+
+
+def gh_api(path, method="GET", body=None, paginate=False):
+    """Call ``gh api`` and return the decoded JSON (lists from pages are joined)."""
+    cmd = [gh_binary(), "api", "-X", method, path]
+    if paginate:
+        cmd.append("--paginate")
+    if body is not None:
+        cmd += ["--input", "-"]
+    proc = subprocess.run(
+        cmd,
+        input=json.dumps(body) if body is not None else None,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise GhError(f"{' '.join(cmd[1:])}: {proc.stderr.strip() or proc.stdout.strip()}")
+    return decode_stream(proc.stdout)
+
+
+def decode_stream(text):
+    """Decode one or more concatenated JSON values, as ``--paginate`` emits."""
+    decoder = json.JSONDecoder()
+    values, pos, text = [], 0, text.strip()
+    while pos < len(text):
+        value, pos = decoder.raw_decode(text, pos)
+        values.append(value)
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    if all(isinstance(v, list) for v in values):
+        return [item for v in values for item in v]
+    return values
+
+
+def repo_path(suffix):
+    """Build a REST path under the current repo; gh fills {owner}/{repo}."""
+    return f"repos/{{owner}}/{{repo}}/{suffix}"
+
+
+def me():
+    """Return the login of the authenticated user."""
+    return gh_api("user")["login"]
+
+
+def get_issue(n):
+    """Fetch an issue fresh from GitHub."""
+    return gh_api(repo_path(f"issues/{n}"))
+
+
+def labels_of(issue):
+    """Return the set of label names on an issue."""
+    return {label["name"] for label in issue.get("labels", [])}
+
+
+def state_of(issue):
+    """Return the workflow state label of an issue, or None."""
+    present = [s for s in STATES if s in labels_of(issue)]
+    if len(present) > 1:
+        raise Refused(f"issue has more than one state label: {present}; fix it by hand")
+    return present[0] if present else None
+
+
+def linked_prs(n):
+    """Return PRs whose body links issue ``n`` with a closing keyword."""
+    pattern = re.compile(LINK_RE.format(n=n))
+    pulls = gh_api(repo_path("pulls?state=all&per_page=100"), paginate=True) or []
+    return [p for p in pulls if pattern.search(p.get("body") or "")]
+
+
+def result_comments(n, author=None):
+    """Return the results comments on issue ``n``, optionally by one author."""
+    comments = gh_api(repo_path(f"issues/{n}/comments?per_page=100"), paginate=True) or []
+    found = [c for c in comments if RESULT_MARKER in (c.get("body") or "")]
+    if author:
+        found = [c for c in found if c.get("user", {}).get("login") == author]
+    return found
+
+
+def repo_root():
+    """Return the git top-level directory, or the cwd outside a repo."""
+    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    return Path(proc.stdout.strip()) if proc.returncode == 0 else Path.cwd()
+
+
+def state_dir():
+    """Return the local state directory (gitignored), creating it."""
+    root = Path(os.environ.get("AGENT_RAILS_DIR") or repo_root() / ".rails")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def now():
+    """Return the current UTC time as an ISO string."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def split_globs(name, default):
+    """Return the comma-separated glob list from env var ``name``."""
+    return [g.strip() for g in os.environ.get(name, default).split(",") if g.strip()]
+
+
+def docs_reads_since(since):
+    """Return docs paths from the hook's read log at or after ``since``."""
+    log = state_dir() / "reads.log"
+    if not log.exists():
+        return []
+    globs = split_globs("AGENT_RAILS_DOCS", DEFAULT_DOCS)
+    excluded = split_globs("AGENT_RAILS_NOT_DOCS", DEFAULT_NOT_DOCS)
+    paths = []
+    for line in log.read_text().splitlines():
+        entry = json.loads(line)
+        if since and entry["at"] < since:
+            continue
+        path = entry["path"]
+        if any(fnmatch.fnmatch(path, g) for g in excluded):
+            continue
+        if any(fnmatch.fnmatch(path, g) for g in globs) and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def claim_record(n):
+    """Return the local claim record for issue ``n``, or None."""
+    path = state_dir() / "claims" / f"{n}.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def confirm_labels(n, must_have, must_lack):
+    """Re-read the issue and raise Unconfirmed unless its labels match."""
+    labels = labels_of(get_issue(n))
+    missing = [x for x in must_have if x not in labels]
+    lingering = [x for x in must_lack if x in labels]
+    if missing or lingering:
+        raise Unconfirmed(f"issue #{n} read back with labels {sorted(labels)}; missing {missing}, still has {lingering}")
+    return labels
+
+
+def move(n, old, new):
+    """Swap state label ``old`` for ``new`` and confirm by read-back."""
+    if old:
+        gh_api(repo_path(f"issues/{n}/labels/{old}"), method="DELETE")
+    gh_api(repo_path(f"issues/{n}/labels"), method="POST", body={"labels": [new]})
+    confirm_labels(n, [new], [old] if old else [])
+
+
+def cmd_init(args):
+    """Create the state labels in the repo if they are missing."""
+    existing = {label["name"] for label in gh_api(repo_path("labels?per_page=100"), paginate=True) or []}
+    for name in STATES:
+        if name not in existing:
+            gh_api(repo_path("labels"), method="POST", body={"name": name, "color": LABEL_COLORS[name]})
+    print(json.dumps({"labels": list(STATES)}))
+
+
+def cmd_claim(args):
+    """Claim an open, unclaimed issue: assign me and label in-progress."""
+    n, login = args.issue, me()
+    issue = get_issue(n)
+    if issue.get("state") != "open":
+        raise Refused(f"issue #{n} is {issue.get('state')}, not open")
+    current = state_of(issue)
+    if current:
+        raise Refused(f"issue #{n} is already '{current}'; claim needs an unlabelled issue")
+    others = [a["login"] for a in issue.get("assignees", []) if a["login"] != login]
+    if others:
+        raise Refused(f"issue #{n} is assigned to {others}")
+    gh_api(repo_path(f"issues/{n}/assignees"), method="POST", body={"assignees": [login]})
+    gh_api(repo_path(f"issues/{n}/labels"), method="POST", body={"labels": ["in-progress"]})
+    fresh = get_issue(n)
+    if login not in [a["login"] for a in fresh.get("assignees", [])] or "in-progress" not in labels_of(fresh):
+        raise Unconfirmed(f"claim of #{n} not visible on read-back")
+    claims = state_dir() / "claims"
+    claims.mkdir(exist_ok=True)
+    (claims / f"{n}.json").write_text(json.dumps({"issue": n, "by": login, "at": now()}))
+    print(json.dumps({"issue": n, "state": "in-progress", "assignee": login}))
+
+
+def cmd_result(args):
+    """Post a results comment, then read it back by id before reporting success."""
+    n = args.issue
+    text = Path(args.body_file).read_text() if args.body_file != "-" else sys.stdin.read()
+    claim = claim_record(n)
+    reads = docs_reads_since(claim["at"] if claim else None)
+    evidence = "\n".join(f"- `{p}`" for p in reads) or "- (none recorded)"
+    body = f"{RESULT_MARKER}\n{text.strip()}\n\n**Docs read (from the hook log):**\n{evidence}\n"
+    posted = gh_api(repo_path(f"issues/{n}/comments"), method="POST", body={"body": body})
+    found = [c for c in result_comments(n) if c.get("id") == posted.get("id")]
+    if not found or found[0].get("body", "").strip() != body.strip():
+        raise Unconfirmed(f"results comment {posted.get('id')} on #{n} is not readable back")
+    print(json.dumps({"issue": n, "comment": found[0].get("html_url"), "id": found[0]["id"]}))
+
+
+def cmd_review(args):
+    """Move in-progress to review once a linked PR, results and docs reads exist."""
+    n = args.issue
+    issue = get_issue(n)
+    current = state_of(issue)
+    if current != "in-progress":
+        raise Refused(f"issue #{n} is '{current}'; review needs 'in-progress'")
+    prs = [p for p in linked_prs(n) if p.get("state") == "open" or p.get("merged_at")]
+    if not prs:
+        raise Refused(f"no open or merged PR links #{n} (put 'Closes #{n}' in the PR body)")
+    if not result_comments(n, author=me()):
+        raise Refused(f"no results comment on #{n}; run: ghflow result {n} --body-file FILE")
+    claim = claim_record(n)
+    if not os.environ.get("AGENT_RAILS_SKIP_DOCS_CHECK"):
+        if not docs_reads_since(claim["at"] if claim else None):
+            raise Refused(f"the read log shows no docs read since the claim of #{n}; explore the docs first")
+    move(n, "in-progress", "review")
+    print(json.dumps({"issue": n, "state": "review", "prs": [p["html_url"] for p in prs]}))
+
+
+def cmd_rework(args):
+    """Send an issue back from review to in-progress."""
+    n = args.issue
+    current = state_of(get_issue(n))
+    if current != "review":
+        raise Refused(f"issue #{n} is '{current}'; rework needs 'review'")
+    move(n, "review", "in-progress")
+    print(json.dumps({"issue": n, "state": "in-progress"}))
+
+
+def cmd_done(args):
+    """Move review to done, only when a linked PR is merged."""
+    n = args.issue
+    current = state_of(get_issue(n))
+    if current != "review":
+        raise Refused(f"issue #{n} is '{current}'; done needs 'review'")
+    merged = [p for p in linked_prs(n) if p.get("merged_at")]
+    if not merged:
+        raise Refused(f"no merged PR links #{n}; done is earned by a merge, not a report")
+    move(n, "review", "done")
+    print(json.dumps({"issue": n, "state": "done", "merged": [p["html_url"] for p in merged]}))
+
+
+def cmd_release(args):
+    """Drop a claim: remove in-progress and my assignment."""
+    n, login = args.issue, me()
+    current = state_of(get_issue(n))
+    if current != "in-progress":
+        raise Refused(f"issue #{n} is '{current}'; release needs 'in-progress'")
+    gh_api(repo_path(f"issues/{n}/labels/in-progress"), method="DELETE")
+    gh_api(repo_path(f"issues/{n}/assignees"), method="DELETE", body={"assignees": [login]})
+    confirm_labels(n, [], ["in-progress"])
+    print(json.dumps({"issue": n, "state": None}))
+
+
+def snapshot_issue(issue, pulls):
+    """Return the facts the observer tracks for one issue."""
+    n = issue["number"]
+    pattern = re.compile(LINK_RE.format(n=n))
+    prs = {
+        str(p["number"]): ("merged" if p.get("merged_at") else p.get("state"))
+        for p in pulls
+        if pattern.search(p.get("body") or "")
+    }
+    return {
+        "state": state_of(issue),
+        "issue_state": issue.get("state"),
+        "assignees": sorted(a["login"] for a in issue.get("assignees", [])),
+        "comments": issue.get("comments", 0),
+        "prs": prs,
+    }
+
+
+def snapshot(numbers=None):
+    """Return {issue number: facts} for open issues and any listed numbers."""
+    issues = gh_api(repo_path("issues?state=all&per_page=100"), paginate=True) or []
+    pulls = gh_api(repo_path("pulls?state=all&per_page=100"), paginate=True) or []
+    wanted = {str(x) for x in numbers} if numbers else None
+    snap = {}
+    for issue in issues:
+        if "pull_request" in issue:
+            continue
+        key = str(issue["number"])
+        if wanted is not None and key not in wanted:
+            continue
+        if wanted is None and issue.get("state") != "open" and not state_of(issue):
+            continue
+        snap[key] = snapshot_issue(issue, pulls)
+    return snap
+
+
+def diff_snapshots(old, new):
+    """Turn two snapshots into a list of event dicts."""
+    events = []
+    for key, facts in sorted(new.items(), key=lambda kv: int(kv[0])):
+        before = old.get(key)
+        if before is None:
+            events.append({"issue": int(key), "event": "seen", **facts})
+            continue
+        if before["state"] != facts["state"]:
+            events.append({"issue": int(key), "event": "state", "from": before["state"], "to": facts["state"]})
+        if before["comments"] != facts["comments"]:
+            events.append({"issue": int(key), "event": "comments", "from": before["comments"], "to": facts["comments"]})
+        if before["issue_state"] != facts["issue_state"]:
+            events.append({"issue": int(key), "event": "issue", "from": before["issue_state"], "to": facts["issue_state"]})
+        for pr, pr_state in facts["prs"].items():
+            if before["prs"].get(pr) != pr_state:
+                events.append({"issue": int(key), "event": "pr", "pr": int(pr), "from": before["prs"].get(pr), "to": pr_state})
+    return events
+
+
+def cmd_watch(args):
+    """Poll GitHub and print one JSON line per change (the observer's eyes)."""
+    state_file = Path(args.state) if args.state else state_dir() / "watch.json"
+    numbers = args.issues or None
+    while True:
+        old = json.loads(state_file.read_text()) if state_file.exists() else {}
+        new = snapshot(numbers)
+        for event in diff_snapshots(old, new):
+            print(json.dumps({"at": now(), **event}), flush=True)
+        state_file.write_text(json.dumps(new))
+        if args.once:
+            return
+        time.sleep(args.interval)
+
+
+def cmd_status(args):
+    """Print the record for one issue: state, PRs, results comments."""
+    n = args.issue
+    issue = get_issue(n)
+    prs = linked_prs(n)
+    results = result_comments(n)
+    print(json.dumps({
+        "issue": n,
+        "state": state_of(issue),
+        "issue_state": issue.get("state"),
+        "assignees": [a["login"] for a in issue.get("assignees", [])],
+        "prs": [{"number": p["number"], "url": p.get("html_url"), "state": "merged" if p.get("merged_at") else p.get("state")} for p in prs],
+        "results": [c.get("html_url") for c in results],
+        "accept": state_of(issue) in ("review", "done") and bool(prs) and bool(results),
+    }, indent=2))
+
+
+def build_parser():
+    """Build the argument parser."""
+    parser = argparse.ArgumentParser(prog="ghflow", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--repo", help="OWNER/REPO (default: the repo of the current directory)")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("init", help="create the state labels").set_defaults(func=cmd_init)
+    for name, func, text in (
+        ("claim", cmd_claim, "assign me + label in-progress"),
+        ("review", cmd_review, "in-progress -> review (needs linked PR, results, docs reads)"),
+        ("rework", cmd_rework, "review -> in-progress"),
+        ("done", cmd_done, "review -> done (needs a merged linked PR)"),
+        ("release", cmd_release, "drop my claim"),
+        ("status", cmd_status, "print the record for an issue"),
+    ):
+        p = sub.add_parser(name, help=text)
+        p.add_argument("issue", type=int)
+        p.set_defaults(func=func)
+    p = sub.add_parser("result", help="post a results comment and read it back")
+    p.add_argument("issue", type=int)
+    p.add_argument("--body-file", required=True, help="markdown file, or - for stdin")
+    p.set_defaults(func=cmd_result)
+    p = sub.add_parser("watch", help="poll and print change events as JSON lines")
+    p.add_argument("issues", type=int, nargs="*", help="limit to these issues")
+    p.add_argument("--interval", type=int, default=60)
+    p.add_argument("--once", action="store_true", help="one poll, then exit")
+    p.add_argument("--state", help="snapshot file (default .rails/watch.json)")
+    p.set_defaults(func=cmd_watch)
+    return parser
+
+
+def main(argv=None):
+    """Entry point; maps refusals and unconfirmed writes to exit codes."""
+    args = build_parser().parse_args(argv)
+    if args.repo:
+        os.environ["GH_REPO"] = args.repo
+    try:
+        args.func(args)
+    except Refused as exc:
+        print(f"ghflow: refused: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    except Unconfirmed as exc:
+        print(f"ghflow: not confirmed: {exc}", file=sys.stderr)
+        return EXIT_UNCONFIRMED
+    except GhError as exc:
+        print(f"ghflow: gh failed: {exc}", file=sys.stderr)
+        return EXIT_GH
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

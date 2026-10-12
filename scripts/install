@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+usage() {
+  cat <<USAGE
+usage: scripts/install TARGET_REPO [--force]
+
+Vendors the kit into TARGET_REPO/.agent-rails and wires it up:
+  .agent-rails/{hooks,scripts}           the hook scripts, ghflow, checklist
+  .claude/settings.json                  Claude Code hooks   (skipped if present unless --force)
+  .codex/hooks.json                      Codex hooks         (skipped if present unless --force)
+  .claude/skills/issue-worker/SKILL.md   the skill for Claude Code
+  .agents/skills/issue-worker/SKILL.md   the same skill for Codex
+  .gitignore                             gains .rails/ (local state: logs, receipts, claims)
+USAGE
+}
+[ $# -ge 1 ] || { usage; exit 1; }
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then usage; exit 0; fi
+target=$(cd "$1" && pwd)
+force=${2:-}
+kit=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "$target/.agent-rails" "$target/.claude/skills/issue-worker" "$target/.agents/skills/issue-worker" "$target/.codex"
+rm -rf "$target/.agent-rails/hooks" "$target/.agent-rails/scripts"
+cp -R "$kit/hooks" "$kit/scripts" "$target/.agent-rails/"
+cp "$kit/skills/issue-worker/SKILL.md" "$target/.claude/skills/issue-worker/SKILL.md"
+cp "$kit/skills/issue-worker/SKILL.md" "$target/.agents/skills/issue-worker/SKILL.md"
+for pair in "claude/settings.json:.claude/settings.json" "codex/hooks.json:.codex/hooks.json"; do
+  src="$kit/hooks/${pair%%:*}"; dst="$target/${pair#*:}"
+  if [ -e "$dst" ] && [ "$force" != "--force" ]; then
+    echo "kept existing ${pair#*:}; merge the \"hooks\" block from hooks/${pair%%:*} by hand"
+  else
+    cp "$src" "$dst"; echo "wrote ${pair#*:}"
+  fi
+done
+grep -qxF '.rails/' "$target/.gitignore" 2>/dev/null || echo '.rails/' >> "$target/.gitignore"
+echo "installed agent-rails into $target"

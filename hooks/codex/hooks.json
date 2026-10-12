@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"$(git rev-parse --show-toplevel)/.agent-rails/hooks/stop_gate.py\"", "timeout": 60 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"$(git rev-parse --show-toplevel)/.agent-rails/hooks/tool_guard.py\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"$(git rev-parse --show-toplevel)/.agent-rails/hooks/read_log.py\"", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
