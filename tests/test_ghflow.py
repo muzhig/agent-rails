@@ -228,6 +228,58 @@ class TestObserverViews(GhflowCase):
         self.assertTrue(status["accept"])
         self.assertEqual(status["prs"][0]["state"], "open")
 
+    def status(self, n=1):
+        return json.loads(self.ghflow("status", str(n)).stdout)
+
+    def test_pr_closed_unmerged_after_review_is_not_accepted(self):
+        self.claimed_ready_for_review()
+        self.ghflow("review", "1")
+        self.assertTrue(self.status()["accept"])
+        s = self.state()
+        s["pulls"][0]["state"] = "closed"
+        self.write_state(s)
+        status = self.status()
+        self.assertEqual((status["state"], status["prs"][0]["state"]), ("review", "closed"))
+        self.assertFalse(status["accept"])
+
+    def test_done_label_without_merged_pr_is_not_accepted(self):
+        self.add_issue(1, labels=["done"])
+        self.add_pr(10, "Closes #1")
+        self.log_docs_read()
+        self.post_result(1)
+        self.assertFalse(self.status()["accept"])
+        s = self.state()
+        s["pulls"][0].update(state="closed", merged_at="2026-10-12T01:00:00Z")
+        self.write_state(s)
+        self.assertTrue(self.status()["accept"])
+
+    def test_merged_pr_accepted_in_review(self):
+        self.claimed_ready_for_review()
+        self.ghflow("review", "1")
+        s = self.state()
+        s["pulls"][0].update(state="closed", merged_at="2026-10-12T01:00:00Z")
+        self.write_state(s)
+        self.assertTrue(self.status()["accept"])
+
+    def test_watch_reports_new_pr_feedback_once(self):
+        self.add_issue(1)
+        self.add_pr(10, "Closes #1")
+        snap = str(self.root / "snap.json")
+        self.ghflow("watch", "--once", "--state", snap)
+        s = self.state()
+        s["pr_feedback"] = {"10": {
+            "comments": [{"id": 1, "user": {"login": "rev"}, "html_url": "https://github.com/o/r/pull/10#issuecomment-1"}],
+            "review_comments": [{"id": 2, "user": {"login": "rev"}, "html_url": "https://github.com/o/r/pull/10#discussion_r2"}],
+            "reviews": [{"id": 3, "user": {"login": "rev"}, "state": "CHANGES_REQUESTED", "html_url": "https://github.com/o/r/pull/10#pullrequestreview-3"}],
+        }}
+        self.write_state(s)
+        events = [json.loads(x) for x in self.ghflow("watch", "--once", "--state", snap).stdout.splitlines()]
+        feedback = [e for e in events if e["event"] == "feedback"]
+        self.assertEqual(sorted(e["kind"] for e in feedback), ["comment", "review", "review_comment"])
+        self.assertTrue(all(e["pr"] == 10 and e["author"] == "rev" and e["url"] for e in feedback))
+        self.assertEqual([e["review_state"] for e in feedback if e["kind"] == "review"], ["CHANGES_REQUESTED"])
+        self.assertEqual(self.ghflow("watch", "--once", "--state", snap).stdout, "")
+
     def test_watch_turns_changes_into_events(self):
         self.add_issue(1)
         self.add_issue(2)

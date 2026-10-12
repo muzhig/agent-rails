@@ -146,6 +146,36 @@ class TestReceipts(ChecklistCase):
         _, report = self.status()
         self.assertIn("posts/a.md", report["forged"])
 
+    def test_failed_recheck_of_a_command_item_reopens_it(self):
+        proc = self.checklist("init", "svc", "--from-cmd", "echo api", "--check", "test -f healthy")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        (self.root / "healthy").write_text("")
+        self.assertEqual(self.checklist("verify", "svc", "api").returncode, 0)
+        (self.root / "healthy").unlink()
+        self.assertEqual(self.checklist("verify", "svc", "api").returncode, 1)
+        proc = self.checklist("status", "svc", "--json")
+        self.assertEqual(proc.returncode, 2)
+        self.assertEqual(json.loads(proc.stdout)[0]["open"], ["api"])
+
+    def test_failed_recheck_of_an_issue_item_reopens_it(self):
+        self.add_issue(4, labels=["migrate"])
+        self.checklist("init", "mig", "--issues-label", "migrate", "--check", "test -f migrated-{item}")
+        (self.root / "migrated-4").write_text("")
+        self.assertEqual(self.checklist("verify", "mig", "4").returncode, 0)
+        (self.root / "migrated-4").unlink()
+        self.checklist("verify", "mig", "4")
+        proc = self.checklist("status", "mig", "--json")
+        self.assertEqual((proc.returncode, json.loads(proc.stdout)[0]["open"]), (2, ["4"]))
+
+    def test_failed_recheck_with_an_external_dependency_reopens_a_file_item(self):
+        self.checklist("init", "dep", "--glob", "posts/a.md", "--check", "test -f build.ok")
+        (self.root / "build.ok").write_text("")
+        self.assertEqual(self.checklist("verify", "dep", "posts/a.md").returncode, 0)
+        (self.root / "build.ok").unlink()
+        self.checklist("verify", "dep", "posts/a.md")
+        proc = self.checklist("status", "dep", "--json")
+        self.assertEqual((proc.returncode, json.loads(proc.stdout)[0]["open"]), (2, ["posts/a.md"]))
+
     def test_key_lives_outside_the_repo_with_0600(self):
         self.init_posts()
         key = self.env["AGENT_RAILS_KEY"]

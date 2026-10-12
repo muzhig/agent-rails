@@ -8,7 +8,8 @@ The agent never writes the list and never writes a receipt.
   check command next to them.
 * ``verify`` is the runner: it runs the stored check for each item and, only
   when the check exits 0, writes a receipt signed with an HMAC key kept
-  outside the repo.
+  outside the repo. A recheck discards the item's old receipt first, so a
+  failed or interrupted check leaves the item open.
 * ``status`` re-derives the items from the source, so items added after
   ``init`` show up as open, and accepts only receipts whose signature, check
   and content hash still match. A hand-written receipt is reported as forged.
@@ -149,7 +150,7 @@ def cmd_init(args):
 
 
 def cmd_verify(args):
-    """Run the stored check per item and write a signed receipt on success."""
+    """Run the stored check per item; drop any old receipt, write a signed one only on success."""
     checklist = load_list(args.name)
     key = load_key(create=True)
     items = derive_items(checklist["source"]) if args.all or not args.items else args.items
@@ -162,6 +163,7 @@ def cmd_verify(args):
             print(json.dumps({"item": item, "ok": False, "why": "not an item of this list"}))
             failed += 1
             continue
+        (out_dir / f"{item_id(item)}.json").unlink(missing_ok=True)
         cmd = checklist["check"].replace("{item}", shlex.quote(item))
         proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, env={**os.environ, "ITEM": item})
         if proc.returncode != 0:

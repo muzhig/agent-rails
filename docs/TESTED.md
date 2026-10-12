@@ -2,7 +2,7 @@
 
 All runs were made on 2026-10-12. Outputs are pasted as printed; temp paths are left in.
 
-Sections 1–3 were re-run on the commit that adds this file. Sections 4–6 ran earlier the same day, in a workspace that was lost to a container restart before it was pushed. The code was rebuilt from the same source, and the re-run of sections 1–3 passed unchanged. The rebuild also added two read-log tests (Codex's `cmd` argument, logging into another worktree). Section 4–6 transcripts are copied from that session's log.
+Sections 1–3 were re-run on the latest commit (after the review fixes in section 8). Sections 4–6 ran earlier the same day, in a workspace that was lost to a container restart before it was pushed. The code was rebuilt from the same source, and the re-run of sections 1–3 passed unchanged. The rebuild also added two read-log tests (Codex's `cmd` argument, logging into another worktree). Section 4–6 transcripts are copied from that session's log.
 
 ## Versions
 
@@ -24,9 +24,9 @@ The hook contracts in use:
 
 | What | How | Result |
 |------|-----|--------|
-| `ghflow` refuses or allows each transition; read-back catches dropped writes | 25 unit tests, fake `gh` | pass |
-| `checklist`: items come from the data, receipts come from the runner, forged/copied/stale receipts are rejected | 15 unit tests | pass |
-| Hook scripts against both harnesses' payloads: block, cap, fail-open, fail-closed, guard, read log | 16 unit tests | pass |
+| `ghflow` refuses or allows each transition; read-back catches dropped writes; `status` acceptance; `watch` events incl. PR feedback | 28 unit tests, fake `gh` | pass |
+| `checklist`: items come from the data, receipts come from the runner, forged/copied/stale receipts are rejected, a failed recheck reopens an item | 17 unit tests | pass |
+| Hook scripts against both harnesses' payloads: block, cap, fail-open, fail-closed, guard, read log | 18 unit tests | pass |
 | Claude Code fires Stop / PreToolUse / PostToolUse from the repo's `.claude/settings.json` | real `claude -p`, scripted fake model, 5 scenarios | pass |
 | Codex fires Stop / PreToolUse / PostToolUse from the repo's `.codex/hooks.json` | real `codex exec`, scripted fake model, 6 scenarios | pass |
 | The hooks in a live interactive Claude Code session with a real model | the session that built this repo | PostToolUse and PreToolUse confirmed; Stop not exercised |
@@ -38,7 +38,7 @@ The hook contracts in use:
 ```
 $ python3 -m unittest discover -s tests -v
 ...
-Ran 56 tests in 5.542s
+Ran 63 tests in 7.301s
 
 OK
 ```
@@ -66,11 +66,11 @@ The model is fake. Claude Code, its settings loading, its hook dispatch and the 
 
 ```
 $ python3 tests/harness/claude_e2e.py
-{"scenario": "stop_blocks", "ok": true, "seconds": 0.6, "stop_hook_feedback": ["Stop hook feedback:\n3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (no receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify <list> <item>` so the runner writes its receipt. Block 1 of 3."], "final_open": [], "result": "success"}
+{"scenario": "stop_blocks", "ok": true, "seconds": 0.5, "stop_hook_feedback": ["Stop hook feedback:\n3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (no receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify <list> <item>` so the runner writes its receipt. Block 1 of 3."], "final_open": [], "result": "success"}
 {"scenario": "guard_and_wrapper", "ok": true, "seconds": 0.5, "pretooluse_denial": "ERROR Change workflow labels with `ghflow claim|review|rework|done <issue>`, not raw gh; ghflow checks the PR, the results comment and the merge.", "wrapper_refusal": "ERROR Exit code 3\n{\"issue\": 1, \"state\": \"in-progress\", \"assignee\": \"alice\"}\nghflow: refused: no open or merged PR links #1 (put 'Closes #1' in the PR body)", "labels_after": ["in-progress"], "raw_gh_issue_edit_calls": []}
-{"scenario": "forged_receipt_and_cap", "ok": true, "seconds": 0.5, "blocks": 3, "first_block": "Stop hook feedback:\n3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (forged receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify <list> <item>` so the runner writes its receipt. Block 1 of 3.", "cap_system_message_seen": true, "forged": ["posts/b.md"], "result": "success"}
-{"scenario": "fail_open", "ok": true, "seconds": 0.3, "stop_hook_feedback": [], "result": "success", "hook_error_events": ["stop-hook-error"]}
-{"scenario": "read_log", "ok": true, "seconds": 0.5, "reads_log": [{"at": "2026-10-12T10:34:52+00:00", "session": "bb7702f6-40be-4020-ad39-bc539f856707", "tool": "Read", "path": "docs/guide.md"}], "results_comment": "<!-- agent-rails:result -->\nStamped the posts.\n\n**Docs read (from the hook log):**\n- `docs/guide.md`\n"}
+{"scenario": "forged_receipt_and_cap", "ok": true, "seconds": 0.6, "blocks": 3, "first_block": "Stop hook feedback:\n3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (forged receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify <list> <item>` so the runner writes its receipt. Block 1 of 3.", "cap_system_message_seen": true, "forged": ["posts/b.md"], "result": "success"}
+{"scenario": "fail_open", "ok": true, "seconds": 0.4, "stop_hook_feedback": [], "result": "success", "hook_error_events": ["stop-hook-error"]}
+{"scenario": "read_log", "ok": true, "seconds": 0.6, "reads_log": [{"at": "2026-10-12T10:45:22+00:00", "session": "fa930d47-b0b4-43ff-9a1e-522c68b97a5d", "tool": "Read", "path": "docs/guide.md"}], "results_comment": "<!-- agent-rails:result -->\nStamped the posts.\n\n**Docs read (from the hook log):**\n- `docs/guide.md`\n"}
 ```
 
 Also observed: in `-p` mode Claude Code loaded the project's `.claude/settings.json` hooks and the `.claude/skills/issue-worker` skill (it was listed in the init event) with no trust prompt.
@@ -98,12 +98,12 @@ codex exec --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sa
 
 ```
 $ python3 tests/harness/codex_e2e.py
-{"scenario": "stop_blocks", "ok": true, "seconds": 2.5, "stop_hook_prompt": "<hook_prompt hook_run_id=\"stop:2:/tmp/rails-cx-stop_blocks-pr64bzgr/demo/.codex/hooks.json\">3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (no receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify &lt;list&gt; &lt;item&gt;` so the runner writes its receipt. Block 1 of 3.</hook_prompt>", "final_open": []}
-{"scenario": "guard_and_wrapper", "ok": true, "seconds": 2.3, "pretooluse_denial": "Command blocked by PreToolUse hook: Change workflow labels with `ghflow claim|review|rework|done <issue>`, not raw gh; ghflow checks the PR, the results comment and the merge.. Command: gh issue edit 1 --add-label review", "wrapper_refusal": "Chunk ID: 7f7856\nWall time: 0.0000 seconds\nProcess exited with code 3\nOriginal token count: 35\nOutput:\n{\"issue\": 1, \"state\": \"in-progress\", \"assignee\": \"alice\"}\nghflow: refused: no open or merged PR links #1 (put 'Closes #1' in the PR body)\n", "labels_after": ["in-progress"], "raw_gh_issue_edit_calls": []}
-{"scenario": "forged_receipt_and_cap", "ok": true, "seconds": 2.4, "blocks": 3, "first_block": "<hook_prompt hook_run_id=\"stop:2:/tmp/rails-cx-forged_receipt_and_cap-arr6uyea/demo/.codex/hooks.json\">3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (forged receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify &lt;list&gt; &lt;item&gt;` so the runner writes its receipt. Block 1 of 3.</hook_prompt>", "forged": ["posts/b.md"], "turn_completed": true}
-{"scenario": "fail_open", "ok": true, "seconds": 5.0, "hook_prompts": [], "model_requests": 1, "turn_completed": true}
-{"scenario": "read_log", "ok": true, "seconds": 2.6, "reads_log": [{"at": "2026-10-12T10:35:05+00:00", "session": "01a12fae-27c7-7cb1-8611-c500288c5364", "tool": "Bash", "path": "docs/guide.md"}], "results_comment": "<!-- agent-rails:result -->\nStamped the posts.\n\n**Docs read (from the hook log):**\n- `docs/guide.md`\n"}
-{"scenario": "untrusted_hooks_do_not_run", "ok": true, "seconds": 3.3, "hook_prompts": [], "codex_notices": ["Model metadata for `fake-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."]}
+{"scenario": "stop_blocks", "ok": true, "seconds": 2.9, "stop_hook_prompt": "<hook_prompt hook_run_id=\"stop:2:/tmp/rails-cx-stop_blocks-ony1k88x/demo/.codex/hooks.json\">3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (no receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify &lt;list&gt; &lt;item&gt;` so the runner writes its receipt. Block 1 of 3.</hook_prompt>", "final_open": []}
+{"scenario": "guard_and_wrapper", "ok": true, "seconds": 2.4, "pretooluse_denial": "Command blocked by PreToolUse hook: Change workflow labels with `ghflow claim|review|rework|done <issue>`, not raw gh; ghflow checks the PR, the results comment and the merge.. Command: gh issue edit 1 --add-label review", "wrapper_refusal": "Chunk ID: 827a93\nWall time: 0.0000 seconds\nProcess exited with code 3\nOriginal token count: 35\nOutput:\n{\"issue\": 1, \"state\": \"in-progress\", \"assignee\": \"alice\"}\nghflow: refused: no open or merged PR links #1 (put 'Closes #1' in the PR body)\n", "labels_after": ["in-progress"], "raw_gh_issue_edit_calls": []}
+{"scenario": "forged_receipt_and_cap", "ok": true, "seconds": 2.6, "blocks": 3, "first_block": "<hook_prompt hook_run_id=\"stop:2:/tmp/rails-cx-forged_receipt_and_cap-zkd9wgjn/demo/.codex/hooks.json\">3 checklist item(s) have no valid receipt: stamp: posts/a.md (no receipt); stamp: posts/b.md (forged receipt); stamp: posts/c.md (no receipt). Finish each one, then run `checklist verify &lt;list&gt; &lt;item&gt;` so the runner writes its receipt. Block 1 of 3.</hook_prompt>", "forged": ["posts/b.md"], "turn_completed": true}
+{"scenario": "fail_open", "ok": true, "seconds": 2.3, "hook_prompts": [], "model_requests": 1, "turn_completed": true}
+{"scenario": "read_log", "ok": true, "seconds": 2.7, "reads_log": [{"at": "2026-10-12T10:45:32+00:00", "session": "01a12fb7-bba9-7721-b339-0cdffb06e34e", "tool": "Bash", "path": "docs/guide.md"}], "results_comment": "<!-- agent-rails:result -->\nStamped the posts.\n\n**Docs read (from the hook log):**\n- `docs/guide.md`\n"}
+{"scenario": "untrusted_hooks_do_not_run", "ok": true, "seconds": 2.4, "hook_prompts": [], "codex_notices": ["Model metadata for `fake-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."]}
 ```
 
 The Codex hooks are tested against the CLI with a scripted model, but not yet with real hook trust or a real model (see section 7).
@@ -280,6 +280,26 @@ The real-GitHub run doesn't cover a real `done`, which needs a merged PR. `done`
 - [ ] **`AGENT_RAILS_FAIL_CLOSED=1` in a real harness.** Unit-tested only.
 - [ ] **macOS.** Everything ran on Linux. The scripts are Python 3 stdlib plus a bash installer, so expect no change, but it isn't verified.
 
+## 8. Review round 1: three findings, fixed with regression tests
+
+A reviewer found three gaps the tests above missed. Each one now has tests that fail on the old code and pass on the new (checked by stashing the fix and re-running: 6 failures before, 0 after).
+
+1. **`ghflow status` accepted a closed, unmerged PR.** `accept` was `state in (review, done) and any linked PR and a result`. Acceptance now follows the same rules as the transitions: `review` needs an open or merged linked PR, `done` needs a merged one, and both need a results comment. Tests: `test_pr_closed_unmerged_after_review_is_not_accepted`, `test_done_label_without_merged_pr_is_not_accepted`, `test_merged_pr_accepted_in_review`. The reviewer's reproduction on this repo's closed throwaway issue now reads:
+
+   ```
+   $ ghflow --repo muzhig/agent-rails status 1
+   {"issue": 1, "state": "review", "issue_state": "closed", "prs": [{"number": 2, "url": "https://github.com/muzhig/agent-rails/pull/2", "state": "closed"}], "accept": false}
+   ```
+
+2. **A failed recheck left the earlier receipt valid.** An item that passed, then failed when its check was re-run (for example, a dependency went away), still showed as done, and the Stop hook let the session end. `checklist verify` now deletes the item's receipt before running the check, so a failed or interrupted recheck leaves the item open. Tests: `test_failed_recheck_of_a_command_item_reopens_it`, `test_failed_recheck_of_an_issue_item_reopens_it`, `test_failed_recheck_with_an_external_dependency_reopens_a_file_item`.
+
+3. **`ghflow watch` didn't see PR feedback**, although the skill told the observer to relay it. For each linked open PR, `watch` now polls conversation comments, inline review comments and reviews. It tracks their ids and emits one `feedback` event per new item, with `kind`, `author`, `url` and `review_state`. Test: `test_watch_reports_new_pr_feedback_once` (three kinds reported, then silence on the next poll). Checked against the real API on this repo's open PR #3:
+
+   ```
+   $ GH_REPO=muzhig/agent-rails python3 -c "...load scripts/ghflow...; print(pr_feedback(3))"
+   review:5489620291 {"kind": "review", "author": "muzhig", "url": "https://github.com/muzhig/agent-rails/pull/3#pullrequestreview-5489620291", "review_state": "COMMENTED"}
+   ```
+
 ## Appendix: unit test list
 
 ```
@@ -291,6 +311,9 @@ test_items_from_issue_label (test_checklist.TestItemsFromData.test_items_from_is
 test_verify_rejects_an_item_not_in_the_data (test_checklist.TestItemsFromData.test_verify_rejects_an_item_not_in_the_data) ... ok
 test_all_done_exits_zero (test_checklist.TestReceipts.test_all_done_exits_zero) ... ok
 test_edit_after_receipt_goes_stale (test_checklist.TestReceipts.test_edit_after_receipt_goes_stale) ... ok
+test_failed_recheck_of_a_command_item_reopens_it (test_checklist.TestReceipts.test_failed_recheck_of_a_command_item_reopens_it) ... ok
+test_failed_recheck_of_an_issue_item_reopens_it (test_checklist.TestReceipts.test_failed_recheck_of_an_issue_item_reopens_it) ... ok
+test_failed_recheck_with_an_external_dependency_reopens_a_file_item (test_checklist.TestReceipts.test_failed_recheck_with_an_external_dependency_reopens_a_file_item) ... ok
 test_failing_check_writes_no_receipt (test_checklist.TestReceipts.test_failing_check_writes_no_receipt) ... ok
 test_hand_written_receipt_is_forged (test_checklist.TestReceipts.test_hand_written_receipt_is_forged) ... ok
 test_key_lives_outside_the_repo_with_0600 (test_checklist.TestReceipts.test_key_lives_outside_the_repo_with_0600) ... ok
@@ -307,8 +330,12 @@ test_done_cannot_skip_review (test_ghflow.TestDone.test_done_cannot_skip_review)
 test_done_refused_with_open_pr (test_ghflow.TestDone.test_done_refused_with_open_pr) ... ok
 test_release_drops_claim (test_ghflow.TestDone.test_release_drops_claim) ... ok
 test_rework_returns_to_in_progress (test_ghflow.TestDone.test_rework_returns_to_in_progress) ... ok
+test_done_label_without_merged_pr_is_not_accepted (test_ghflow.TestObserverViews.test_done_label_without_merged_pr_is_not_accepted) ... ok
 test_init_creates_missing_labels_once (test_ghflow.TestObserverViews.test_init_creates_missing_labels_once) ... ok
+test_merged_pr_accepted_in_review (test_ghflow.TestObserverViews.test_merged_pr_accepted_in_review) ... ok
+test_pr_closed_unmerged_after_review_is_not_accepted (test_ghflow.TestObserverViews.test_pr_closed_unmerged_after_review_is_not_accepted) ... ok
 test_status_accepts_only_recorded_results (test_ghflow.TestObserverViews.test_status_accepts_only_recorded_results) ... ok
+test_watch_reports_new_pr_feedback_once (test_ghflow.TestObserverViews.test_watch_reports_new_pr_feedback_once) ... ok
 test_watch_turns_changes_into_events (test_ghflow.TestObserverViews.test_watch_turns_changes_into_events) ... ok
 test_dropped_comment_is_not_confirmed (test_ghflow.TestResult.test_dropped_comment_is_not_confirmed) ... ok
 test_result_is_read_back_and_carries_docs_evidence (test_ghflow.TestResult.test_result_is_read_back_and_carries_docs_evidence) ... ok
@@ -341,7 +368,7 @@ test_raw_state_label_edit_denied (test_hooks.TestToolGuard.test_raw_state_label_
 test_receipt_tampering_denied (test_hooks.TestToolGuard.test_receipt_tampering_denied) ... ok
 
 ----------------------------------------------------------------------
-Ran 56 tests in 5.542s
+Ran 63 tests in 7.301s
 
 OK
 ```

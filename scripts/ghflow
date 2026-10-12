@@ -309,21 +309,39 @@ def cmd_release(args):
     print(json.dumps({"issue": n, "state": None}))
 
 
+def pr_feedback(number):
+    """Return {id: facts} for a PR's conversation comments, inline review comments and reviews."""
+    sources = (
+        ("comment", f"issues/{number}/comments?per_page=100"),
+        ("review_comment", f"pulls/{number}/comments?per_page=100"),
+        ("review", f"pulls/{number}/reviews?per_page=100"),
+    )
+    found = {}
+    for kind, path in sources:
+        for item in gh_api(repo_path(path), paginate=True) or []:
+            found[f"{kind}:{item['id']}"] = {
+                "kind": kind,
+                "author": (item.get("user") or {}).get("login"),
+                "url": item.get("html_url"),
+                "review_state": item.get("state") if kind == "review" else None,
+            }
+    return found
+
+
 def snapshot_issue(issue, pulls):
-    """Return the facts the observer tracks for one issue."""
+    """Return the facts the observer tracks for one issue, including feedback on its open PRs."""
     n = issue["number"]
     pattern = re.compile(LINK_RE.format(n=n))
-    prs = {
-        str(p["number"]): ("merged" if p.get("merged_at") else p.get("state"))
-        for p in pulls
-        if pattern.search(p.get("body") or "")
-    }
+    linked = [p for p in pulls if pattern.search(p.get("body") or "")]
+    prs = {str(p["number"]): ("merged" if p.get("merged_at") else p.get("state")) for p in linked}
+    feedback = {str(p["number"]): pr_feedback(p["number"]) for p in linked if p.get("state") == "open"}
     return {
         "state": state_of(issue),
         "issue_state": issue.get("state"),
         "assignees": sorted(a["login"] for a in issue.get("assignees", [])),
         "comments": issue.get("comments", 0),
         "prs": prs,
+        "feedback": feedback,
     }
 
 
@@ -362,6 +380,11 @@ def diff_snapshots(old, new):
         for pr, pr_state in facts["prs"].items():
             if before["prs"].get(pr) != pr_state:
                 events.append({"issue": int(key), "event": "pr", "pr": int(pr), "from": before["prs"].get(pr), "to": pr_state})
+        for pr, items in facts.get("feedback", {}).items():
+            seen = before.get("feedback", {}).get(pr, {})
+            for fid, info in items.items():
+                if fid not in seen:
+                    events.append({"issue": int(key), "event": "feedback", "pr": int(pr), "id": fid, **info})
     return events
 
 
@@ -380,20 +403,32 @@ def cmd_watch(args):
         time.sleep(args.interval)
 
 
+def acceptable(state, prs, results):
+    """Return whether the record backs the state: the same rules review and done enforce."""
+    if not results:
+        return False
+    if state == "review":
+        return any(p.get("merged_at") or p.get("state") == "open" for p in prs)
+    if state == "done":
+        return any(p.get("merged_at") for p in prs)
+    return False
+
+
 def cmd_status(args):
-    """Print the record for one issue: state, PRs, results comments."""
+    """Print the record for one issue: state, PRs, results comments, and whether it is acceptable."""
     n = args.issue
     issue = get_issue(n)
+    state = state_of(issue)
     prs = linked_prs(n)
     results = result_comments(n)
     print(json.dumps({
         "issue": n,
-        "state": state_of(issue),
+        "state": state,
         "issue_state": issue.get("state"),
         "assignees": [a["login"] for a in issue.get("assignees", [])],
         "prs": [{"number": p["number"], "url": p.get("html_url"), "state": "merged" if p.get("merged_at") else p.get("state")} for p in prs],
         "results": [c.get("html_url") for c in results],
-        "accept": state_of(issue) in ("review", "done") and bool(prs) and bool(results),
+        "accept": acceptable(state, prs, results),
     }, indent=2))
 
 

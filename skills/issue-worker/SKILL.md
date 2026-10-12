@@ -178,12 +178,14 @@ ghflow watch --interval 60
 ```
 
 It polls and prints one JSON line per change: `state` (label moved), `pr`
-(opened, merged, closed), `comments` (new comment), `issue` (closed or
+(opened, merged, closed), `comments` (new comment on the issue), `feedback`
+(a new conversation comment, inline review comment or review on a linked
+open PR, with `kind`, `author`, `url` and `review_state`), `issue` (closed or
 reopened). Turn events into messages:
 
 | Event | Message to the worker |
 |-------|----------------------|
-| new comment from a reviewer on its issue or PR | "New review comment on #N: <link>. Address it: `ghflow rework N`, fix, push, new result, `ghflow review N`." |
+| `feedback` from a reviewer (not the worker), or `comments` on the issue from a reviewer | "New review feedback on #N: <url>. Address it: `ghflow rework N`, fix, push, new result, `ghflow review N`." |
 | no event from a worker for 3 intervals | "No change on #N for 3 polls. Report what's blocking." |
 | `state` → `review` | none; check acceptance (step 5) |
 | `pr` → merged | none to the worker; run `ghflow done N` yourself |
@@ -200,8 +202,9 @@ result. Before counting an issue:
 ghflow status N
 ```
 
-Count it only when `"accept": true`: state is `review` or `done`, a PR links
-the issue, and a results comment is readable. For checklist units,
+Count it only when `"accept": true`: a results comment is readable, and the
+state is `review` with an open or merged linked PR, or `done` with a merged
+one. A PR closed without merging doesn't count. For checklist units,
 `checklist status NAME` must show the item done. If the worker says done and
 the record disagrees, message the worker with the gap ("#N is still
 `in-progress`: `ghflow review` hasn't run"), and don't fix it yourself.

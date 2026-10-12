@@ -5,7 +5,8 @@ State lives in the JSON file named by FAKE_GH_STATE (calls are serialised
 with a lock file). Every call is appended to ``state["calls"]`` so tests can
 assert what was (not) written. Setting ``state["drop"]`` to a list such as
 ``["comments"]`` makes those POSTs answer 201 without persisting: the write
-that looks done but isn't.
+that looks done but isn't. ``state["pr_feedback"][PR]`` holds a PR's
+``comments``, ``review_comments`` and ``reviews``.
 """
 
 import fcntl
@@ -104,6 +105,12 @@ def api(args, state):
         return out + [{"number": p["number"], "pull_request": {}, "state": p["state"], "labels": []} for p in state.get("pulls", [])]
     if route == "pulls":
         return state.get("pulls", [])
+    m = re.fullmatch(r"(?:pulls/(\d+)/(comments|reviews)|issues/(\d+)/comments)", route)
+    pr_numbers = {str(p["number"]) for p in state.get("pulls", [])}
+    if m and (m.group(1) or m.group(3) in pr_numbers):
+        number = m.group(1) or m.group(3)
+        kind = {"comments": "review_comments", "reviews": "reviews"}[m.group(2)] if m.group(1) else "comments"
+        return state.get("pr_feedback", {}).get(number, {}).get(kind, [])
     m = re.fullmatch(r"issues/(\d+)(?:/(assignees|labels|comments)(?:/(.+))?)?", route)
     if not m:
         save(state)

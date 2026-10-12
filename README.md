@@ -55,7 +55,7 @@ Issue states are labels: `(none) → in-progress → review → done`, and `rewo
 
 **What it prevents:** a ticket moved to review with no PR; a ticket moved to done on a worker's say-so; skipped docs; "I posted the result" when the write never landed. Every write is followed by a GET, so label changes, assignments and comments count only once they read back. Exit 3 means refused. Exit 4 means GitHub accepted the write but a fresh read doesn't show it.
 
-**Cost:** about 4–8 `gh api` calls per transition. `status`, `watch` and `review` list up to 100 PRs per page.
+**Cost:** about 4–8 `gh api` calls per transition. `status`, `watch` and `review` list up to 100 PRs per page. `watch` adds three calls per linked open PR per poll (conversation comments, inline review comments, reviews) so the observer sees PR feedback.
 
 **Failure modes:**
 
@@ -83,7 +83,7 @@ checklist status                           # exit 2 while anything is open
 
 The list comes from the data, never from the agent's memory of what it touched. The source is a glob, `--issues-label`, or `--from-cmd` (one item per output line). `status` re-derives the items every time, so a file added after `init` shows up as open.
 
-Each receipt is HMAC-signed with a key at `~/.config/agent-rails/receipt.key` (mode 0600, outside the repo). It binds the item, the exact check command, the checklist's creation time and, for files, the content hash. `status` marks a receipt **forged** when the signature, item or check don't match, and **stale** when the file changed after the check passed.
+Each receipt is HMAC-signed with a key at `~/.config/agent-rails/receipt.key` (mode 0600, outside the repo). It binds the item, the exact check command, the checklist's creation time and, for files, the content hash. `status` marks a receipt **forged** when the signature, item or check don't match, and **stale** when the file changed after the check passed. A recheck deletes the old receipt before running, so if the item passed once and then fails (a dependency went away), it's open again.
 
 **The trust boundary.** The runner (`checklist verify`) is trusted: it runs a check that was fixed at `init`. The agent isn't trusted: it never writes the list or a receipt, and a hand-written or copied receipt is rejected.
 
@@ -131,8 +131,8 @@ It matches shell commands on their text and file tools on their path only. A Wri
 
 - It builds the work list from GitHub or `checklist`.
 - It spawns one worker sub-agent per issue or item, each in its own git worktree.
-- It watches through `ghflow watch` (polling, one JSON line per change) and turns events into messages for the workers.
-- It accepts an issue only when `ghflow status N` says `"accept": true`, never on a worker's report.
+- It watches through `ghflow watch` (polling, one JSON line per change, including reviewer feedback on linked PRs) and turns events into messages for the workers.
+- It accepts an issue only when `ghflow status N` says `"accept": true` (`review` with an open or merged linked PR, or `done` with a merged one, plus a results comment), never on a worker's report.
 - It never writes code, PRs or results for a worker.
 
 **Cost:** observer polling is two list calls per interval (60 s by default). Each worker is a full agent session.
