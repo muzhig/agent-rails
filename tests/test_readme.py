@@ -24,13 +24,11 @@ class TestReadmeQuickstart(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run([str(KIT / "scripts/install"), str(root)], check=True,
                            capture_output=True, text=True)
-            # The example assumes Python sources; its comment asks the user to do the work.
             (root / "src").mkdir()
             source = root / "src/app.py"
             source.write_text('print("hello")\n')
             env = {**os.environ, "AGENT_RAILS_KEY": str(Path(temp) / "key")}
             env.pop("AGENT_RAILS_DIR", None)
-            # Do not inherit a developer's manually configured kit PATH.
             env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
                                          if not (Path(p) / "checklist").exists())
             for command in commands:

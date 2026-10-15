@@ -70,7 +70,7 @@ def decide(payload):
     more = f" and {len(found) - MAX_LISTED} more" if len(found) > MAX_LISTED else ""
     reason = (
         f"{len(found)} checklist item(s) have no valid receipt: {listed}{more}. "
-        "Finish each one, then run `checklist verify <list> <item>` so the runner writes its receipt. "
+        "Finish each one, then run `.agent-rails/scripts/checklist verify <list> <item>` so the runner writes its receipt. "
         f"Block {count} of {cap}."
     )
     return {"decision": "block", "reason": reason}

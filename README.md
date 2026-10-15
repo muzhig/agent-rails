@@ -24,7 +24,7 @@ docs/TESTED.md          every test run, with versions and output
 
 ## Install
 
-Run the commands from a shell with Git and Python 3 available. The GitHub workflow additionally requires the `gh` CLI, an authenticated GitHub account, and a target repository with a GitHub remote (or an explicit `ghflow --repo OWNER/REPO` argument). Replace `/path/to/your/repo` below with an existing Git working tree.
+You need Git and Python 3. The GitHub workflow also needs an authenticated `gh` and a repo with a GitHub remote.
 
 ```bash
 git clone https://github.com/muzhig/agent-rails.git
@@ -32,7 +32,7 @@ agent-rails/scripts/install /path/to/your/repo
 cd /path/to/your/repo && .agent-rails/scripts/ghflow init   # creates the in-progress / review / done labels
 ```
 
-Run the installed commands from your target repository. The installer does not add its scripts to PATH; use `.agent-rails/scripts/checklist` and `.agent-rails/scripts/ghflow` as shown below.
+The installer doesn't touch your PATH. In the rest of this README, `ghflow` and `checklist` mean `.agent-rails/scripts/ghflow` and `.agent-rails/scripts/checklist`, run from the repo root. Code blocks spell out the full path so you can paste them.
 
 `install` does five things:
 
@@ -52,10 +52,10 @@ Issue states are labels: `(none) → in-progress → review → done`, and `rewo
 
 | Command | Refuses unless |
 |---------|----------------|
-| `.agent-rails/scripts/ghflow claim N` | the issue is open, has no state label, and isn't assigned to someone else |
-| `.agent-rails/scripts/ghflow review N` | it's `in-progress`; an open or merged PR body says `Closes #N` (or Fixes/Resolves); a results comment by you exists; the read log shows docs read since the claim |
-| `.agent-rails/scripts/ghflow done N` | it's `review` and a linked PR is **merged** |
-| `.agent-rails/scripts/ghflow result N --body-file F` | (always posts) exits 0 only once a fresh read shows the comment |
+| `ghflow claim N` | the issue is open, has no state label, and isn't assigned to someone else |
+| `ghflow review N` | it's `in-progress`; an open or merged PR body says `Closes #N` (or Fixes/Resolves); a results comment by you exists; the read log shows docs read since the claim |
+| `ghflow done N` | it's `review` and a linked PR is **merged** |
+| `ghflow result N --body-file F` | (always posts) exits 0 only once a fresh read shows the comment |
 
 **What it prevents:** a ticket moved to review with no PR; a ticket moved to done on a worker's say-so; skipped docs; "I posted the result" when the write never landed. Every write is followed by a GET, so label changes, assignments and comments count only once they read back. Exit 3 means refused. Exit 4 means GitHub accepted the write but a fresh read doesn't show it.
 
@@ -68,7 +68,7 @@ Issue states are labels: `(none) → in-progress → review → done`, and `rewo
 
 ### 2. "Explore the docs first", verified by side effect
 
-`read_log.py` (PostToolUse on Read/Grep/Glob/Bash) appends every file the agent opens to `.rails/reads.log`, in the git work tree that contains the file. `.agent-rails/scripts/ghflow review` refuses while the log shows no docs read since the claim. Docs means `README*`, `CONTRIBUTING*`, `docs/*` and `*.md`, but not the agent's own config (`.claude/`, `.agents/`, `.codex/`). Override with `AGENT_RAILS_DOCS` and `AGENT_RAILS_NOT_DOCS`. `.agent-rails/scripts/ghflow result` copies the list into the results comment, so a reviewer sees which docs were opened, written by a hook rather than typed by the agent.
+`read_log.py` (PostToolUse on Read/Grep/Glob/Bash) records the files the agent reads in `.rails/reads.log`: the Read tool's path, the path a Grep or Glob searched, and files passed to common shell readers, in the git work tree that contains the file. `ghflow review` refuses while the log shows no docs read since the claim. Docs means `README*`, `CONTRIBUTING*`, `docs/*` and `*.md`, but not the agent's own config (`.claude/`, `.agents/`, `.codex/`). Override with `AGENT_RAILS_DOCS` and `AGENT_RAILS_NOT_DOCS`. `ghflow result` copies the list into the results comment, so a reviewer sees which docs were opened, written by a hook rather than typed by the agent.
 
 **Failure modes:**
 
@@ -78,20 +78,20 @@ Issue states are labels: `(none) → in-progress → review → done`, and `rewo
 
 ### 3. `checklist`: "apply X to every item in Y"
 
-This example assumes your target repo contains `src/app.py` (and any other Python files you want to check). Substitute your own glob and file path if it does not. The source must match at least one file. Between `init` and `verify`, add the SPDX header to each matched file.
+The example assumes Python files under `src/`; the glob must match at least one file.
 
 ```bash
 .agent-rails/scripts/checklist init headers --glob 'src/**/*.py' --check "head -1 {item} | grep -q 'SPDX-License-Identifier'"
-# ...do the work...
-.agent-rails/scripts/checklist verify headers src/app.py        # the runner runs the stored check; writes a receipt on exit 0
-.agent-rails/scripts/checklist status                           # exit 2 while anything is open
+# ...do the work: add the SPDX header to each file...
+.agent-rails/scripts/checklist verify headers src/app.py   # the runner runs the stored check; writes a receipt on exit 0
+.agent-rails/scripts/checklist status                      # exit 2 while anything is open
 ```
 
 The list comes from the data, never from the agent's memory of what it touched. The source is a glob, `--issues-label`, or `--from-cmd` (one item per output line). `status` re-derives the items every time, so a file added after `init` shows up as open.
 
 Each receipt is HMAC-signed with a key at `~/.config/agent-rails/receipt.key` (mode 0600, outside the repo). It binds the item, the exact check command, the checklist's creation time and, for files, the content hash. `status` marks a receipt **forged** when the signature, item or check don't match, and **stale** when the file changed after the check passed. A recheck deletes the old receipt before running, so if the item passed once and then fails (a dependency went away), it's open again.
 
-**The trust boundary.** The runner (`.agent-rails/scripts/checklist verify`) is trusted: it runs a check that was fixed at `init`. The agent isn't trusted: it never writes the list or a receipt, and a hand-written or copied receipt is rejected.
+**The trust boundary.** The runner (`checklist verify`) is trusted: it runs a check that was fixed at `init`. The agent isn't trusted: it never writes the list or a receipt, and a hand-written or copied receipt is rejected.
 
 That boundary is a speed bump, not a wall. The agent runs as the same OS user, so a determined agent could read the key, sign its own receipts, or re-`init` the list with a weaker check. `tool_guard.py` denies the obvious routes (the key path, `.rails/receipts/`), but a shell can get around a regex. For a hard boundary, run `verify` somewhere the agent can't reach: CI, a different user, or a container that holds the key.
 
@@ -101,7 +101,7 @@ A check is also only as good as you write it. Shape satisfies the gate: `grep -q
 
 ### 4. The Stop hook: no "done" while items are open
 
-`stop_gate.py` runs `.agent-rails/scripts/checklist status --all`. If anything is open, it returns `{"decision": "block", "reason": "..."}`. The reason names each open item, why it's open (no receipt, forged or stale) and the command that fixes it. The harness hands that reason to the model as its next instruction. Tested on both Claude Code and Codex.
+`stop_gate.py` runs `checklist status --all`. If anything is open, it returns `{"decision": "block", "reason": "..."}`. The reason names each open item, why it's open (no receipt, forged or stale) and the command that fixes it. The harness hands that reason to the model as its next instruction. Tested on both Claude Code and Codex.
 
 **Repeat cap:** at most `AGENT_RAILS_STOP_CAP` blocks per session (default 3). After that, the stop is allowed with a `systemMessage` warning. Without a cap, a gate the agent can't satisfy loops and burns tokens until someone kills the session.
 
@@ -126,19 +126,19 @@ It matches shell commands on their text and file tools on their path only. A Wri
 **Worker mode** runs one issue from claim to review:
 
 1. Read the issue and its comments.
-2. `.agent-rails/scripts/ghflow claim`.
+2. `ghflow claim`.
 3. Explore the docs (logged).
 4. Implement.
 5. Verify by walking each acceptance criterion with its proof.
 6. Open a PR that says `Closes #N`.
-7. `.agent-rails/scripts/ghflow result`, then `.agent-rails/scripts/ghflow review`, and stop. No merging.
+7. `ghflow result`, then `ghflow review`, and stop. No merging.
 
 **Observer mode** coordinates workers:
 
 - It builds the work list from GitHub or `checklist`.
 - It spawns one worker sub-agent per issue or item, each in its own git worktree.
-- It watches through `.agent-rails/scripts/ghflow watch` (polling, one JSON line per change, including reviewer feedback on linked PRs) and turns events into messages for the workers.
-- It accepts an issue only when `.agent-rails/scripts/ghflow status N` says `"accept": true` (`review` with an open or merged linked PR, or `done` with a merged one, plus a results comment), never on a worker's report.
+- It watches through `ghflow watch` (polling, one JSON line per change, including reviewer feedback on linked PRs) and turns events into messages for the workers.
+- It accepts an issue only when `ghflow status N` says `"accept": true` (`review` with an open or merged linked PR, or `done` with a merged one, plus a results comment), never on a worker's report.
 - It never writes code, PRs or results for a worker.
 
 **Cost:** observer polling is two list calls per interval (60 s by default). Each worker is a full agent session.
@@ -155,7 +155,7 @@ It matches shell commands on their text and file tools on their path only. A Wri
 | Loops | a gate the agent can't satisfy | `AGENT_RAILS_STOP_CAP`, then a warning |
 | Write not landed | "result attached", nothing on the issue | read-back, exit 4 |
 | Forged evidence | a hand-written receipt or read log | receipts are signed; the read log is only a speed bump (same-user agent) |
-| Self-report trusted | "done, PR is up" with no PR | the observer accepts only `.agent-rails/scripts/ghflow status` |
+| Self-report trusted | "done, PR is up" with no PR | the observer accepts only `ghflow status` |
 
 ## Tests
 

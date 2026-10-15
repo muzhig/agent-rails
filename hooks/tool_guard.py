@@ -22,13 +22,13 @@ import sys
 STATE = r"(?:in-progress|review|done)"
 RULES = [
     (re.compile(rf"\bgh\s+(?:issue|pr)\s+edit\b.*--(?:add|remove)-label[\s=]+['\"]?[^\s]*{STATE}"),
-     "Change workflow labels with `ghflow claim|review|rework|done <issue>`, not raw gh; ghflow checks the PR, the results comment and the merge."),
+     "Change workflow labels with `.agent-rails/scripts/ghflow claim|review|rework|done <issue>`, not raw gh; ghflow checks the PR, the results comment and the merge."),
     (re.compile(r"\bgh\s+api\b.*issues/\d+/labels"),
-     "Label writes through `gh api` bypass ghflow's checks; use `ghflow`."),
+     "Label writes through `gh api` bypass ghflow's checks; use `.agent-rails/scripts/ghflow`."),
     (re.compile(r"\bgh\s+pr\s+merge\b"),
-     "Agents don't merge. Move the issue to review with `ghflow review <issue>` and stop."),
+     "Agents don't merge. Move the issue to review with `.agent-rails/scripts/ghflow review <issue>` and stop."),
     (re.compile(r"agent-rails/receipt\.key|\.rails/receipts/"),
-     "Receipts are written by `checklist verify`, never by hand, and the receipt key is off limits."),
+     "Receipts are written by `.agent-rails/scripts/checklist verify`, never by hand, and the receipt key is off limits."),
 ]
 
 
