@@ -58,6 +58,9 @@ def run_codex(base, repo, rules, prompt, codex, trust_bypass=True):
         server.terminate()
     events = [json.loads(x) for x in proc.stdout.splitlines() if x.startswith("{")]
     requests = [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+    assert proc.returncode == 0, f"Codex exited {proc.returncode}: {proc.stderr[-4000:]}"
+    assert requests, f"Codex made no model request: {proc.stderr[-4000:]}"
+    assert any(e.get("type") == "turn.completed" for e in events), f"Codex emitted no turn.completed: {events[-3:]}"
     return events, requests
 
 
