@@ -1,0 +1,6 @@
+{"scenario": "stop_blocks", "ok": false, "why": "[]", "dir": "/tmp/rails-cx-stop_blocks-dmitfs3q"}
+{"scenario": "guard_and_wrapper", "ok": false, "why": "[]", "dir": "/tmp/rails-cx-guard_and_wrapper-zbdvjw5f"}
+{"scenario": "forged_receipt_and_cap", "ok": false, "why": "[]", "dir": "/tmp/rails-cx-forged_receipt_and_cap-77ptueih"}
+{"scenario": "fail_open", "ok": true, "seconds": 0.4, "hook_prompts": [], "model_requests": 0, "turn_completed": false}
+{"scenario": "read_log", "ok": false, "why": "([], [])", "dir": "/tmp/rails-cx-read_log-qjhcm_sr"}
+{"scenario": "untrusted_hooks_do_not_run", "ok": true, "seconds": 0.4, "hook_prompts": [], "codex_notices": []}

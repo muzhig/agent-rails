@@ -1,0 +1,3 @@
+Cloning into 'agent-rails'...
+fatal: could not read Username for 'https://github.com': terminal prompts disabled
+exit=128

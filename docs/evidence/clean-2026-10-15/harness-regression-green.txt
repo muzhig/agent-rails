@@ -1,0 +1,9 @@
+test_healthy_session_is_accepted (test_harness_health.TestCodexHarnessHealth.test_healthy_session_is_accepted) ... ok
+test_incomplete_turn_is_failure (test_harness_health.TestCodexHarnessHealth.test_incomplete_turn_is_failure) ... ok
+test_no_model_request_is_failure (test_harness_health.TestCodexHarnessHealth.test_no_model_request_is_failure) ... ok
+test_nonzero_cli_exit_is_failure (test_harness_health.TestCodexHarnessHealth.test_nonzero_cli_exit_is_failure) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.006s
+
+OK
