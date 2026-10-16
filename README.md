@@ -42,7 +42,21 @@ The installer doesn't touch your PATH. In the rest of this README, `ghflow` and 
 - adds `.rails/` to `.gitignore`;
 - leaves the local state to `.rails/`: the read log, claims, checklists, receipts and stop counters.
 
-Codex runs a project's hooks only after you've trusted the project and reviewed the hooks. Until then it skips them without saying so (see the failure modes).
+### Codex: enable the hooks in `/hooks`
+
+Claude Code picks up `.claude/settings.json` on its own. Codex doesn't: it skips a project's hooks, **without saying so**, until you turn them on. Do this once per machine:
+
+1. **Trust the project.** Start `codex` inside the repo. If it asks whether to trust the folder, say yes. Otherwise, set it in `~/.codex/config.toml`:
+   ```toml
+   [projects."/path/to/your/repo"]
+   trust_level = "trusted"
+   ```
+2. **Approve the hooks.** In that `codex` session, open `/hooks`. Review the three agent-rails hooks (Stop, PreToolUse, PostToolUse) and trust each one. When hooks are waiting for review, Codex prints a startup warning pointing you to `/hooks`.
+3. **Check they're on.** `/hooks` should list all three as trusted. For an end-to-end check, start a checklist with an open item and ask Codex to stop: expect a block naming the item.
+
+Codex stores each approval against a hash of the hook definition. Editing `.codex/hooks.json`, or reinstalling a newer kit that changes it, takes the changed hooks off again until you re-approve them in `/hooks`.
+
+There's no `/hooks` screen in non-interactive runs (`codex exec` in CI or a throwaway container). There, `codex exec --dangerously-bypass-hook-trust …` runs the enabled hooks for that one invocation without a stored approval; `tests/harness/codex_e2e.py` does exactly that. Start Codex inside the repo either way: the hook commands find the kit through the repo's git root.
 
 ## The pieces
 
@@ -105,7 +119,7 @@ A check is also only as good as you write it. Shape satisfies the gate: `grep -q
 
 **Repeat cap:** at most `AGENT_RAILS_STOP_CAP` blocks per session (default 3). After that, the stop is allowed with a `systemMessage` warning. Without a cap, a gate the agent can't satisfy loops and burns tokens until someone kills the session.
 
-**Fail-open:** if the hook crashes (bad JSON, missing Python), both harnesses treat the non-zero exit as a hook error and **let the agent stop**. Claude Code shows a "Stop hook error" notice; Codex shows nothing in `exec` mode. Set `AGENT_RAILS_FAIL_CLOSED=1` to make a crash block once (exit 2). The next stop is let through, so a broken gate can't loop.
+**Fail-open:** if the hook crashes (bad JSON, missing Python), both harnesses treat the non-zero exit as a hook error and **let the agent stop**. Claude Code shows a "Stop hook error" notice, though it shows the same notice for an ordinary block. Codex shows nothing in `exec` mode. Set `AGENT_RAILS_FAIL_CLOSED=1` to make a crash block once (exit 2). The next stop is let through, so a broken gate can't loop.
 
 ### 5. The PreToolUse guard
 
