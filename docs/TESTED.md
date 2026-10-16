@@ -399,9 +399,10 @@ It found two bugs, both now fixed:
 1. **The Codex harness reported success when Codex never ran.** With Codex failing at startup, `fail_open` and `untrusted_hooks_do_not_run` printed `ok: true` with 0 model requests, because "no hook output" is what those scenarios expect. `run_codex` now asserts a zero exit, at least one model request and a `turn.completed` event before any scenario check. `tests/test_harness_health.py` has 4 tests; 3 of them fail on the old harness.
 2. **The README's `checklist` commands failed after install.** The installer doesn't put the scripts on PATH, so each bare `checklist …` line exited 127. Code blocks now use `.agent-rails/scripts/…`, and the README says what the short names mean. `tests/test_readme.py` runs the README's checklist block in a freshly installed repo; it failed on the old README with `checklist: not found`.
 
-The same review also changed two things:
+The same review also changed three things:
 - **Hook messages name the installed path.** The Stop reason and the guard's denials said `checklist verify` and `ghflow`, which a model without the skill can't run as typed. They now say `.agent-rails/scripts/checklist` and `.agent-rails/scripts/ghflow`.
 - **The read log's description is narrower.** For Grep and Glob, the hook logs the searched path, not each match.
+- **The Stop hook checks the repo it's installed in.** It used to look for checklists in the harness's working directory. A harness started from a parent directory (an orchestrator's workspace holding several repos) found no checklists, so every stop went through. An installed gate now uses `<repo>/.agent-rails/..`. Test: `test_installed_gate_checks_its_repo_from_a_parent_cwd`, which fails on the old code.
 
 ## 10. macOS run (2026-10-15)
 
@@ -445,6 +446,6 @@ What this shows:
 - **When the gate contradicts the user, these models side with the user, and say so.** No run edited the checklist, a receipt or a hook to get past the gate. Stopping on an explicit instruction leaves the open items on record (exit 2): the gate makes the shortfall visible, and the cap keeps it from fighting the user. Still unprovoked: a model that stops early *without* being told to. In earlier runs with "do all 30, quickly", real models finished all 30, so the gate never fired.
 - **The cap's warning is shown to the user, not the model.** Claude Code printed `Stop says: agent-rails: stop allowed after 3 blocks with 27 checklist items still open` as a notice. `codex exec` showed nothing, although its stop counter reached 4.
 - **Codex's `apply_patch` reaches PreToolUse,** so the receipts-path rule covers Codex file edits too.
-- After the first block, Claude Code also emitted a `stop-hook-error` notification. The hook itself exited 0 with its block JSON. The cause wasn't investigated.
+- After the first block, Claude Code also emitted a `stop-hook-error` notification ("Stop hook error occurred"). It isn't a hook failure. Claude Code's debug log shows the hook exited 0 and its JSON was parsed and validated. Claude Code labels every Stop block this way; a variant that blocks with exit code 2 got the same notice. So in `fail_open`, the notification alone doesn't prove a crash: the absence of any Stop hook feedback does.
 
 The session running the probe didn't load this repo's hooks for its own tool calls: no `.rails/reads.log` appeared. If your hooks matter, check that they fire where your agent actually runs.
