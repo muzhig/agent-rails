@@ -402,7 +402,7 @@ It found two bugs, both now fixed:
 The same review also changed three things:
 - **Hook messages name the installed path.** The Stop reason and the guard's denials said `checklist verify` and `ghflow`, which a model without the skill can't run as typed. They now say `.agent-rails/scripts/checklist` and `.agent-rails/scripts/ghflow`.
 - **The read log's description is narrower.** For Grep and Glob, the hook logs the searched path, not each match.
-- **The Stop hook checks the repo it's installed in.** It used to look for checklists in the harness's working directory. A harness started from a parent directory (an orchestrator's workspace holding several repos) found no checklists, so every stop went through. An installed gate now uses `<repo>/.agent-rails/..`. Test: `test_installed_gate_checks_its_repo_from_a_parent_cwd`, which fails on the old code.
+- **The Stop hook checks the repo it's installed in.** It used to look for checklists in the harness's working directory. A harness started from a parent directory (an orchestrator's workspace holding several repos) found no checklists, so every stop went through. An installed gate now checks the repo that holds its `.agent-rails/` folder. Test: `test_installed_gate_checks_its_repo_from_a_parent_cwd`, which fails on the old code.
 
 ## 10. macOS run (2026-10-15)
 
