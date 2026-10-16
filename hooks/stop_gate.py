@@ -27,7 +27,13 @@ MAX_LISTED = 15
 
 
 def project_root(payload):
-    """Return the project directory the hook runs for."""
+    """Return the repo the kit is installed in, else the harness's project directory.
+
+    An installed gate lives in <repo>/.agent-rails/hooks, so it checks that repo even
+    when the harness runs from a parent directory (an orchestrator workspace).
+    """
+    if KIT.name == ".agent-rails":
+        return KIT.parent
     return Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
 
 

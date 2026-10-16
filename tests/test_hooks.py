@@ -2,9 +2,10 @@
 
 import json
 import subprocess
+import sys
 import unittest
 
-from helpers import RepoCase
+from helpers import KIT, RepoCase
 
 
 def stop_payload(session="s1", active=False):
@@ -50,6 +51,18 @@ class TestStopGate(RepoCase):
         self.run_script("scripts/checklist", "verify", "stamp", "--all")
         proc = self.stop()
         self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+
+    def test_installed_gate_checks_its_repo_from_a_parent_cwd(self):
+        subprocess.run([str(KIT / "scripts" / "install"), str(self.root)], check=True, capture_output=True)
+        self.init_list()
+        env = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
+        workspace = self.root.parent
+        payload = json.dumps({"session_id": "s1", "hook_event_name": "Stop", "stop_hook_active": False, "cwd": str(workspace)})
+        proc = subprocess.run([sys.executable, str(self.root / ".agent-rails" / "hooks" / "stop_gate.py")], cwd=workspace,
+                              input=payload, capture_output=True, text=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
+        self.assertIn("posts/a.md", proc.stdout)
 
     def test_repeat_cap_lets_the_session_end(self):
         self.init_list()
