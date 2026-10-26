@@ -20,6 +20,7 @@ scripts/
 skills/issue-worker/SKILL.md   worker mode + observer mode
 tests/                  unit tests (fake gh) and real-CLI harnesses (fake model)
 docs/TESTED.md          every test run, with versions and output
+docs/grooming-template.md   a planning pass before code, and how to judge the plan
 ```
 
 ## Install
